@@ -5,8 +5,7 @@ require('dotenv').config();
 
 const { execSync } = require('child_process');
 const axios = require('axios');
-const nodemailer = require('nodemailer');
-const { WebClient } = require('@slack/web-api');
+const { sendNotifications } = require('./notifier');
 
 // Configuration loaded from environment variables with defaults
 const config = {
@@ -20,6 +19,7 @@ const config = {
   jiraUrl: process.env.JIRA_URL || 'https://your-domain.atlassian.net',
   jiraApiToken: process.env.JIRA_API_TOKEN,
   jiraUsername: process.env.JIRA_USERNAME,
+  jiraIssueTypeOrder: (process.env.JIRA_ISSUE_TYPE_ORDER || '').split(',').map(type => type.trim()).filter(Boolean),
   
   // Email configuration
   emailEnabled: process.env.EMAIL_ENABLED === 'true' || false,
@@ -32,9 +32,62 @@ const config = {
   
   // Slack configuration
   slackEnabled: process.env.SLACK_ENABLED === 'true' || false,
-  slackToken: process.env.SLACK_TOKEN,
+  slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
   slackChannel: process.env.SLACK_CHANNEL || '#builds'
 };
+
+// Variables for branch names
+let sourceBranch, targetBranch;
+
+// Check if running as a GitHub Action
+if (process.env.GITHUB_ACTIONS === 'true') {
+  try {
+    // Import @actions/core for GitHub Actions
+    const core = require('@actions/core');
+    
+    // Git configuration
+    config.defaultMergeStrategy = core.getInput('merge_strategy') || config.defaultMergeStrategy;
+    config.dryRun = core.getInput('dry_run') === 'true' || config.dryRun;
+    config.repoPath = core.getInput('repository_path') || config.repoPath;
+    
+    // Jira configuration
+    const jiraProjectKeys = core.getInput('jira_project_keys');
+    if (jiraProjectKeys) {
+      config.jiraProjectKeys = jiraProjectKeys.split(',').map(key => key.trim());
+    }
+    config.jiraUrl = core.getInput('jira_url') || config.jiraUrl;
+    config.jiraUsername = core.getInput('jira_username') || config.jiraUsername;
+    config.jiraApiToken = core.getInput('jira_api_token') || config.jiraApiToken;
+    
+    // Email configuration
+    config.emailEnabled = core.getInput('email_enabled') === 'true' || config.emailEnabled;
+    config.emailFrom = core.getInput('email_from') || config.emailFrom;
+    const emailTo = core.getInput('email_to');
+    if (emailTo) {
+      config.emailTo = emailTo.split(',').map(email => email.trim());
+    }
+    config.smtpHost = core.getInput('smtp_host') || config.smtpHost;
+    config.smtpPort = parseInt(core.getInput('smtp_port') || config.smtpPort.toString(), 10);
+    config.smtpUser = core.getInput('smtp_user') || config.smtpUser;
+    config.smtpPass = core.getInput('smtp_pass') || config.smtpPass;
+    
+    // Slack configuration
+    config.slackEnabled = core.getInput('slack_enabled') === 'true' || config.slackEnabled;
+    config.slackWebhookUrl = core.getInput('slack_token') || config.slackWebhookUrl;
+    config.slackChannel = core.getInput('slack_channel') || config.slackChannel;
+    
+    // Get source and target branches from inputs
+    sourceBranch = core.getInput('source_branch', { required: true });
+    targetBranch = core.getInput('target_branch', { required: true });
+    
+    console.log('Running as GitHub Action');
+    console.log(`Source branch: ${sourceBranch}`);
+    console.log(`Target branch: ${targetBranch}`);
+  } catch (error) {
+    console.error('Error parsing GitHub Action inputs:', error.message);
+    process.exit(1);
+  }
+}
 
 /**
  * Main function to perform the merge with enhanced commit message
@@ -48,20 +101,40 @@ async function performMerge(sourceBranch, targetBranch) {
     const commits = getCommitsBetweenBranches(sourceBranch, targetBranch);
     const jiraIssues = await extractAndEnrichJiraIssues(commits, sourceBranch);
     
-    // 2. Generate a structured commit message
+    // 2. Generate a structured commit message for Git
     const commitMessage = generateCommitMessage(jiraIssues, sourceBranch, targetBranch);
     
     // 3. Perform the merge
     executeMerge(sourceBranch, targetBranch, commitMessage);
     
-    // 4. Send notifications
-    await sendNotifications(commitMessage, sourceBranch, targetBranch, true);
+    // 4. Generate a Slack-specific message with links
+    const slackMessage = generateCommitMessage(jiraIssues, sourceBranch, targetBranch, true);
+    
+    // 5. Send notifications
+    await sendNotifications(config, slackMessage, sourceBranch, targetBranch, true);
+    
+    // 6. Set GitHub Actions outputs if running as a GitHub Action
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const core = require('@actions/core');
+      core.setOutput('success', 'true');
+      core.setOutput('jira_issues', JSON.stringify(jiraIssues.map(issue => issue.key)));
+      core.setOutput('commit_message', commitMessage);
+    }
     
     console.log('Merge completed successfully!');
     return true;
   } catch (error) {
     console.error('Error during merge process:', error.message);
+    
+    // Set GitHub Actions outputs for failure if running as a GitHub Action
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const core = require('@actions/core');
+      core.setOutput('success', 'false');
+      core.setOutput('error_message', error.message);
+    }
+    
     await sendNotifications(
+      config,
       `Failed to merge ${sourceBranch} into ${targetBranch}: ${error.message}`,
       sourceBranch, 
       targetBranch, 
@@ -221,8 +294,14 @@ async function fetchJiraIssue(issueKey) {
 
 /**
  * Generate a structured commit message grouped by issue type
+ * 
+ * @param {Array} jiraIssues - Array of Jira issues
+ * @param {string} sourceBranch - Source branch name
+ * @param {string} targetBranch - Target branch name
+ * @param {boolean} forSlack - Whether to format the message for Slack (with links)
+ * @returns {string} - Formatted message
  */
-function generateCommitMessage(jiraIssues, sourceBranch, targetBranch) {
+function generateCommitMessage(jiraIssues, sourceBranch, targetBranch, forSlack = false) {
   // Group issues by type
   const issuesByType = jiraIssues.reduce((acc, issue) => {
     const type = issue.issueType || 'Other';
@@ -234,17 +313,54 @@ function generateCommitMessage(jiraIssues, sourceBranch, targetBranch) {
   }, {});
   
   // Build commit message
-  let message = `Merge ${sourceBranch} into ${targetBranch}\n\n`;
+  let message = `Release ${sourceBranch} into ${targetBranch}\n\n`;
+  
+  // Get all issue types
+  let issueTypes = Object.keys(issuesByType);
+  
+  // Sort issue types based on the configured order
+  if (config.jiraIssueTypeOrder && config.jiraIssueTypeOrder.length > 0) {
+    // Create a map for quick lookup of order index
+    const orderMap = new Map();
+    config.jiraIssueTypeOrder.forEach((type, index) => {
+      orderMap.set(type, index);
+    });
+    
+    // Sort issue types: first the ones in the configured order, then the rest alphabetically
+    issueTypes.sort((a, b) => {
+      const aIndex = orderMap.has(a) ? orderMap.get(a) : Number.MAX_SAFE_INTEGER;
+      const bIndex = orderMap.has(b) ? orderMap.get(b) : Number.MAX_SAFE_INTEGER;
+      
+      if (aIndex !== bIndex) {
+        return aIndex - bIndex; // Sort by configured order
+      }
+      
+      // If both are not in the configured order or have the same order, sort alphabetically
+      return a.localeCompare(b);
+    });
+  }
   
   // Add issues by type
-  Object.keys(issuesByType).forEach(type => {
-    message += `## ${type}\n`;
+  issueTypes.forEach(type => {
+    // For Slack, use bold formatting for headers
+    message += forSlack ? `*${type}*\n` : `## ${type}\n`;
     
     issuesByType[type].forEach(issue => {
-      if (issue.summary !== 'Unknown') {
-        message += `- ${issue.key}: ${issue.summary}\n`;
+      if (forSlack) {
+        // For Slack, create a link using the URL from the Jira issue
+        const issueLink = `<${issue.url}|${issue.key}>`;
+        if (issue.summary !== 'Unknown') {
+          message += `- ${issueLink}: ${issue.summary}\n`;
+        } else {
+          message += `- ${issueLink}\n`;
+        }
       } else {
-        message += `- ${issue.key}\n`;
+        // For Git commit message, use plain text
+        if (issue.summary !== 'Unknown') {
+          message += `- ${issue.key}: ${issue.summary}\n`;
+        } else {
+          message += `- ${issue.key}\n`;
+        }
       }
     });
     
@@ -298,120 +414,29 @@ function executeMerge(sourceBranch, targetBranch, commitMessage) {
   }
 }
 
-/**
- * Send notifications via email and Slack
- */
-async function sendNotifications(message, sourceBranch, targetBranch, success) {
-  const subject = success
-    ? `Merge Completed: ${sourceBranch} → ${targetBranch}`
-    : `Merge Failed: ${sourceBranch} → ${targetBranch}`;
-  
-  // Send email notification
-  if (config.emailEnabled) {
-    await sendEmailNotification(subject, message);
-  }
-  
-  // Send Slack notification
-  if (config.slackEnabled) {
-    await sendSlackNotification(subject, message, success);
-  }
-}
-
-/**
- * Send email notification
- */
-async function sendEmailNotification(subject, message) {
-  try {
-    const transporter = nodemailer.createTransport({
-      host: config.smtpHost,
-      port: config.smtpPort,
-      secure: config.smtpPort === 465,
-      auth: {
-        user: config.smtpUser,
-        pass: config.smtpPass
-      }
-    });
-    
-    await transporter.sendMail({
-      from: config.emailFrom,
-      to: config.emailTo.join(', '),
-      subject,
-      text: message,
-      html: message.replace(/\n/g, '<br>').replace(/## (.+)/g, '<h2>$1</h2>')
-    });
-    
-    console.log('Email notification sent successfully');
-  } catch (error) {
-    console.error('Error sending email notification:', error.message);
-  }
-}
-
-/**
- * Send Slack notification
- */
-async function sendSlackNotification(subject, message, success) {
-  try {
-    const web = new WebClient(config.slackToken);
-    
-    await web.chat.postMessage({
-      channel: config.slackChannel,
-      text: subject,
-      blocks: [
-        {
-          type: 'header',
-          text: {
-            type: 'plain_text',
-            text: subject
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: message
-          }
-        },
-        {
-          type: 'context',
-          elements: [
-            {
-              type: 'mrkdwn',
-              text: `Status: ${success ? '✅ Success' : '❌ Failed'}`
-            }
-          ]
-        }
-      ]
-    });
-    
-    console.log('Slack notification sent successfully');
-  } catch (error) {
-    console.error('Error sending Slack notification:', error.message);
-  }
-}
-
 // Command line parsing
 const args = process.argv.slice(2);
 let dryRun = false;
 let repoPath = null;
-let sourceBranch, targetBranch;
 
-// Parse command line arguments
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--dry-run' || args[i] === '-d') {
-    dryRun = true;
-  } else if (args[i] === '--repo-path' || args[i] === '-r') {
-    if (i + 1 < args.length) {
-      repoPath = args[i + 1];
-      i++; // Skip the next argument as it's the path
+// Skip command line parsing if running as a GitHub Action
+if (process.env.GITHUB_ACTIONS !== 'true') {
+  // Parse command line arguments
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--dry-run' || args[i] === '-d') {
+      dryRun = true;
+    } else if (args[i] === '--repo-path' || args[i] === '-r') {
+      if (i + 1 < args.length) {
+        repoPath = args[i + 1];
+        i++; // Skip the next argument as it's the path
+      }
+    } else if (!sourceBranch) {
+      sourceBranch = args[i];
+    } else if (!targetBranch) {
+      targetBranch = args[i];
     }
-  } else if (!sourceBranch) {
-    sourceBranch = args[i];
-  } else if (!targetBranch) {
-    targetBranch = args[i];
   }
-}
 
-if (sourceBranch && targetBranch) {
   // Override dry run config if specified via command line
   if (dryRun) {
     config.dryRun = true;
@@ -423,7 +448,10 @@ if (sourceBranch && targetBranch) {
     config.repoPath = repoPath;
     console.log(`Using repository at: ${repoPath}`);
   }
-  
+}
+
+// Proceed with merge if we have source and target branches
+if (sourceBranch && targetBranch) {
   // Verify the repo path exists and is a git repository
   const fs = require('fs');
   const path = require('path');
@@ -441,10 +469,14 @@ if (sourceBranch && targetBranch) {
       console.error('Unhandled error:', error);
       process.exit(1);
     });
-} else {
+} else if (process.env.GITHUB_ACTIONS !== 'true') {
+  // Only show usage if not running as a GitHub Action
   console.log('Usage: node index.js [options] <source-branch> <target-branch>');
   console.log('Options:');
   console.log('  --dry-run, -d       Run without performing any actual merges');
   console.log('  --repo-path, -r     Path to the git repository (default: current directory)');
+  process.exit(1);
+} else {
+  console.error('Error: Source branch and target branch are required');
   process.exit(1);
 }

@@ -88,6 +88,16 @@ inputs:
     description: 'Slack channel for notifications'
     required: false
 
+outputs:
+  success:
+    description: 'Whether the merge was successful'
+  jira_issues:
+    description: 'JSON array of Jira issue keys found in the merge'
+  commit_message:
+    description: 'The generated commit message used for the merge'
+  error_message:
+    description: 'Error message if the merge failed'
+
 runs:
   using: 'node16'
   main: 'index.js'

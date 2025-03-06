@@ -1,0 +1,58 @@
+name: Jira-Enhanced Merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Source branch to merge from'
+        required: true
+        type: string
+      target_branch:
+        description: 'Target branch to merge into'
+        required: true
+        type: string
+      dry_run:
+        description: 'Run without performing actual merges'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Important: Fetch all history for all branches
+
+      - name: Set Git identity
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+
+      - name: Merge with Jira integration
+        id: merge
+        uses: gommo/jira-merge-action@v1
+        with:
+          source_branch: ${{ github.event.inputs.source_branch }}
+          target_branch: ${{ github.event.inputs.target_branch }}
+          dry_run: ${{ github.event.inputs.dry_run }}
+          jira_project_keys: 'PROJ,TEST'  # Replace with your project keys
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_username: ${{ secrets.JIRA_USERNAME }}
+          jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
+          # Optional: Enable Slack notifications
+          slack_enabled: 'true'
+          slack_token: ${{ secrets.SLACK_TOKEN }}
+          slack_channel: '#builds'
+
+      - name: Show results
+        if: always()
+        run: |
+          echo "Merge success: ${{ steps.merge.outputs.success }}"
+          echo "Jira issues: ${{ steps.merge.outputs.jira_issues }}"
+          
+          if [ "${{ steps.merge.outputs.success }}" != "true" ]; then
+            echo "Error: ${{ steps.merge.outputs.error_message }}"
+          fi 

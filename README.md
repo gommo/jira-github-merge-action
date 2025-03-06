@@ -1,85 +1,171 @@
 # Jira-Enhanced Merge Action
 
-A GitHub Action for merging branches with enhanced commit messages generated from Jira issues.
+A GitHub Action that merges branches with enhanced commit messages generated from Jira issues.
 
 ## Features
 
-- Enforces merge commits (configurable to use squash if needed)
-- Extracts Jira issue keys from:
-  - Branch names
-  - Commit messages
-  - PR descriptions
-- Groups Jira issues by type in the commit message
-- Sends notifications via:
-  - Email
-  - Slack
+- Automatically extracts Jira issue keys from branch names and commit messages
+- Fetches issue details from Jira API to enrich commit messages
+- Groups issues by type in the commit message
+- Supports both merge and squash merge strategies
+- Optional email and Slack notifications
+- Dry run mode for testing
 
-## Usage as Node.js Script
+## Usage
 
-During development, you can run this as a standalone Node.js script:
+### Basic Usage
 
-```bash
-# Install dependencies
-npm install
+```yaml
+name: Merge with Jira Integration
 
-# Run the script
-node index.js <source-branch> <target-branch>
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Source branch to merge from'
+        required: true
+      target_branch:
+        description: 'Target branch to merge into'
+        required: true
 
-# Example:
-node index.js develop staging
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Important: Fetch all history for all branches
 
-# Run in dry run mode (no actual merging)
-node index.js --dry-run develop staging
-# or
-node index.js -d develop staging
+      - name: Set Git identity
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+
+      - name: Merge with Jira integration
+        uses: gommo/jira-merge-action@v1
+        with:
+          source_branch: ${{ github.event.inputs.source_branch }}
+          target_branch: ${{ github.event.inputs.target_branch }}
+          jira_project_keys: 'PROJ,TEST'
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_username: ${{ secrets.JIRA_USERNAME }}
+          jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
 ```
 
-## Environment Variables
+### Complete Example with All Options
 
-The script uses a `.env` file to manage environment variables. Create a `.env` file in the project root:
+```yaml
+name: Merge with Jira Integration
 
-1. Copy the example file:
-```bash
-cp .env.example .env
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Source branch to merge from'
+        required: true
+      target_branch:
+        description: 'Target branch to merge into'
+        required: true
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Important: Fetch all history for all branches
+
+      - name: Set Git identity
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+
+      - name: Merge with Jira integration
+        uses: gommo/jira-merge-action@v1
+        with:
+          # Required inputs
+          source_branch: ${{ github.event.inputs.source_branch }}
+          target_branch: ${{ github.event.inputs.target_branch }}
+          jira_project_keys: 'PROJ,TEST'
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_username: ${{ secrets.JIRA_USERNAME }}
+          jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
+          
+          # Optional inputs
+          repository_path: '.'
+          merge_strategy: 'merge'  # 'merge' or 'squash'
+          dry_run: 'false'
+          
+          # Email notification options
+          email_enabled: 'true'
+          email_from: ${{ secrets.EMAIL_FROM }}
+          email_to: 'team@example.com,manager@example.com'
+          smtp_host: ${{ secrets.SMTP_HOST }}
+          smtp_port: '587'
+          smtp_user: ${{ secrets.SMTP_USER }}
+          smtp_pass: ${{ secrets.SMTP_PASS }}
+          
+          # Slack notification options
+          slack_enabled: 'true'
+          slack_token: ${{ secrets.SLACK_TOKEN }}
+          slack_channel: '#builds'
 ```
 
-2. Edit the `.env` file and fill in your values:
-```
-# Jira Authentication
-JIRA_USERNAME=your-jira-email@company.com
-JIRA_API_TOKEN=your-jira-api-token
+## Inputs
 
-# For Email Notifications (if enabled)
-SMTP_USER=your-smtp-username
-SMTP_PASS=your-smtp-password
+### Required Inputs
 
-# For Slack Notifications (if enabled)
-SLACK_TOKEN=your-slack-api-token
-```
+| Input | Description |
+|-------|-------------|
+| `source_branch` | Source branch to merge from |
+| `target_branch` | Target branch to merge into |
+| `jira_project_keys` | Comma-separated list of Jira project keys to look for |
+| `jira_url` | URL of your Jira instance |
+| `jira_username` | Jira username or email |
+| `jira_api_token` | Jira API token |
 
-Note: The `.env` file is included in `.gitignore` to prevent accidentally committing sensitive information.
+### Optional Inputs
 
-## Configuration
+| Input | Description | Default |
+|-------|-------------|---------|
+| `repository_path` | Path to the git repository | `.` |
+| `merge_strategy` | Merge strategy (merge or squash) | `merge` |
+| `dry_run` | Run without performing any actual merges | `false` |
 
-Edit the `config.js` file to customize:
+### Email Notification Inputs
 
-- Jira project keys to look for
-- Jira URL
-- Email notification settings
-- Slack notification settings
-- Default merge strategy
+| Input | Description | Default |
+|-------|-------------|---------|
+| `email_enabled` | Enable email notifications | `false` |
+| `email_from` | Email sender address | |
+| `email_to` | Comma-separated list of email recipients | |
+| `smtp_host` | SMTP server hostname | |
+| `smtp_port` | SMTP server port | `587` |
+| `smtp_user` | SMTP username | |
+| `smtp_pass` | SMTP password | |
 
-## Converting to GitHub Action
+### Slack Notification Inputs
 
-To convert this script to a GitHub Action:
+| Input | Description | Default |
+|-------|-------------|---------|
+| `slack_enabled` | Enable Slack notifications | `false` |
+| `slack_token` | Slack API token | |
+| `slack_channel` | Slack channel for notifications | |
 
-1. Create an `action.yml` file (see below)
-2. Modify the script to use GitHub Action inputs instead of command line arguments
-3. Package everything into a Docker container or use Node.js action
-4. Publish to the GitHub Marketplace
+## Publishing
 
-## Future Improvements
+To publish a new version of this action:
 
-- Support for multiple target branches
-- Custom templates for commit messages
-- Support for other issue tracking systems
+1. Make your changes
+2. Update the version in `package.json`
+3. Create a new tag following semantic versioning:
+   ```
+   git tag -a v1.0.0 -m "Release v1.0.0"
+   git push origin v1.0.0
+   ```
+
+## License
+
+MIT
