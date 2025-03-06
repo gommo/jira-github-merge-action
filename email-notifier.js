@@ -20,6 +20,13 @@ async function sendEmailNotification(config, subject, message) {
       return;
     }
 
+    // Extract repository name from subject if present
+    let repoInfo = '';
+    const repoMatch = subject.match(/\[(.*?)\]/);
+    if (repoMatch && repoMatch[1]) {
+      repoInfo = `<p><strong>Repository:</strong> ${repoMatch[1]}</p>`;
+    }
+
     const transporter = nodemailer.createTransport({
       host: config.smtpHost,
       port: config.smtpPort,
@@ -30,12 +37,18 @@ async function sendEmailNotification(config, subject, message) {
       }
     });
     
+    // Create HTML version with repository info
+    const htmlMessage = `
+      ${repoInfo}
+      ${message.replace(/\n/g, '<br>').replace(/## (.+)/g, '<h2>$1</h2>')}
+    `;
+    
     await transporter.sendMail({
       from: config.emailFrom,
       to: config.emailTo.join(', '),
       subject,
       text: message,
-      html: message.replace(/\n/g, '<br>').replace(/## (.+)/g, '<h2>$1</h2>')
+      html: htmlMessage
     });
     
     console.log('Email notification sent successfully');

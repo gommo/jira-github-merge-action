@@ -14,12 +14,13 @@ const { sendSlackNotification } = require('./slack-notifier');
  * @param {string} sourceBranch - Source branch name
  * @param {string} targetBranch - Target branch name
  * @param {boolean} success - Whether the operation was successful
+ * @param {string} repoName - Repository name
  * @returns {Promise<void>}
  */
-async function sendNotifications(config, message, sourceBranch, targetBranch, success) {
+async function sendNotifications(config, message, sourceBranch, targetBranch, success, repoName = 'unknown-repo') {
   const subject = success
-    ? `Release Deployed: ${sourceBranch} → ${targetBranch}`
-    : `Release Failed: ${sourceBranch} → ${targetBranch}`;
+    ? `[${repoName}] Release Deployed: ${sourceBranch} → ${targetBranch}`
+    : `[${repoName}] Release Failed: ${sourceBranch} → ${targetBranch}`;
   
   // Send email notification
   if (config.emailEnabled) {

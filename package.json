@@ -1,6 +1,6 @@
 {
   "name": "jira-github-merge-action",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "GitHub action for merging branches with Jira issue tracking",
   "main": "index.js",
   "scripts": {

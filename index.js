@@ -97,6 +97,10 @@ async function performMerge(sourceBranch, targetBranch) {
     console.log(`Starting merge from ${sourceBranch} to ${targetBranch}`);
     console.log(`Using repository at: ${config.repoPath}`);
     
+    // Get repository name
+    const repoName = getRepositoryName();
+    console.log(`Repository name: ${repoName}`);
+    
     // 1. Get commits between branches to extract Jira keys
     const commits = getCommitsBetweenBranches(sourceBranch, targetBranch);
     const jiraIssues = await extractAndEnrichJiraIssues(commits, sourceBranch);
@@ -111,7 +115,7 @@ async function performMerge(sourceBranch, targetBranch) {
     const slackMessage = generateCommitMessage(jiraIssues, sourceBranch, targetBranch, true);
     
     // 5. Send notifications
-    await sendNotifications(config, slackMessage, sourceBranch, targetBranch, true);
+    await sendNotifications(config, slackMessage, sourceBranch, targetBranch, true, repoName);
     
     // 6. Set GitHub Actions outputs if running as a GitHub Action
     if (process.env.GITHUB_ACTIONS === 'true') {
@@ -126,6 +130,14 @@ async function performMerge(sourceBranch, targetBranch) {
   } catch (error) {
     console.error('Error during merge process:', error.message);
     
+    // Get repository name even in case of error
+    let repoName = 'unknown-repo';
+    try {
+      repoName = getRepositoryName();
+    } catch (e) {
+      console.warn('Could not get repository name during error handling:', e.message);
+    }
+    
     // Set GitHub Actions outputs for failure if running as a GitHub Action
     if (process.env.GITHUB_ACTIONS === 'true') {
       const core = require('@actions/core');
@@ -138,7 +150,8 @@ async function performMerge(sourceBranch, targetBranch) {
       `Failed to merge ${sourceBranch} into ${targetBranch}: ${error.message}`,
       sourceBranch, 
       targetBranch, 
-      false
+      false,
+      repoName
     );
     return false;
   }
@@ -171,6 +184,63 @@ function getCommitsBetweenBranches(sourceBranch, targetBranch) {
   } catch (error) {
     console.error('Error getting commits between branches:', error.message);
     throw error;
+  }
+}
+
+/**
+ * Get the repository name from the git remote URL
+ * @returns {string} Repository name
+ */
+function getRepositoryName() {
+  try {
+    // Build git command with repository path
+    const gitCmd = (cmd) => execSync(cmd, { 
+      cwd: config.repoPath,
+      encoding: 'utf8' 
+    });
+    
+    // Get the remote URL (usually origin)
+    const remoteUrl = gitCmd('git config --get remote.origin.url').trim();
+    
+    // Extract repository name from URL
+    let repoName = '';
+    
+    if (remoteUrl) {
+      // Handle different URL formats:
+      // - https://github.com/username/repo.git
+      // - git@github.com:username/repo.git
+      // - https://username@github.com/username/repo.git
+      
+      if (remoteUrl.includes('github.com')) {
+        // GitHub URL
+        const match = remoteUrl.match(/github\.com[/:](.*?)(\.git)?$/);
+        if (match && match[1]) {
+          repoName = match[1];
+        }
+      } else if (remoteUrl.includes('gitlab')) {
+        // GitLab URL
+        const match = remoteUrl.match(/gitlab[^/]*[/:](.*?)(\.git)?$/);
+        if (match && match[1]) {
+          repoName = match[1];
+        }
+      } else if (remoteUrl.includes('bitbucket')) {
+        // Bitbucket URL
+        const match = remoteUrl.match(/bitbucket[^/]*[/:](.*?)(\.git)?$/);
+        if (match && match[1]) {
+          repoName = match[1];
+        }
+      } else {
+        // Generic extraction - get the last part of the path without .git
+        const parts = remoteUrl.split(/[\/:]/).filter(Boolean);
+        const lastPart = parts[parts.length - 1];
+        repoName = lastPart.replace(/\.git$/, '');
+      }
+    }
+    
+    return repoName || 'unknown-repo';
+  } catch (error) {
+    console.warn('Error getting repository name:', error.message);
+    return 'unknown-repo';
   }
 }
 
@@ -480,3 +550,15 @@ if (sourceBranch && targetBranch) {
   console.error('Error: Source branch and target branch are required');
   process.exit(1);
 }
+
+// Export functions for testing and reuse
+module.exports = {
+  performMerge,
+  getCommitsBetweenBranches,
+  extractAndEnrichJiraIssues,
+  fetchJiraIssues,
+  fetchJiraIssue,
+  generateCommitMessage,
+  executeMerge,
+  getRepositoryName
+};

@@ -23,6 +23,13 @@ async function sendSlackNotification(config, subject, message, success) {
 
     console.log('Sending Slack notification with message:', message);
 
+    // Extract repository name from subject if present
+    let repoName = 'unknown-repo';
+    const repoMatch = subject.match(/\[(.*?)\]/);
+    if (repoMatch && repoMatch[1]) {
+      repoName = repoMatch[1];
+    }
+
     // Use axios to post to the Slack webhook URL
     await axios.post(config.slackWebhookUrl, {
       text: subject,
@@ -46,7 +53,7 @@ async function sendSlackNotification(config, subject, message, success) {
           elements: [
             {
               type: 'mrkdwn',
-              text: `Status: ${success ? '✅ Success' : '❌ Failed'}`
+              text: `Repository: *${repoName}* | Status: ${success ? '✅ Success' : '❌ Failed'}`
             }
           ]
         }
