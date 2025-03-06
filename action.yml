@@ -1,0 +1,93 @@
+name: 'Jira-Enhanced Merge Action'
+description: 'Merge branches with enhanced commit messages generated from Jira issues'
+author: 'gommo'
+branding:
+  icon: 'git-merge'
+  color: 'blue'
+
+inputs:
+  source_branch:
+    description: 'Source branch to merge from'
+    required: true
+  
+  target_branch:
+    description: 'Target branch to merge into'
+    required: true
+    
+  repository_path:
+    description: 'Path to the git repository'
+    required: false
+    default: '.'
+  
+  merge_strategy:
+    description: 'Merge strategy (merge or squash)'
+    required: false
+    default: 'merge'
+    
+  dry_run:
+    description: 'Run without performing any actual merges'
+    required: false
+    default: 'false'
+  
+  jira_project_keys:
+    description: 'Comma-separated list of Jira project keys to look for'
+    required: true
+  
+  jira_url:
+    description: 'URL of your Jira instance'
+    required: true
+  
+  jira_username:
+    description: 'Jira username or email'
+    required: true
+  
+  jira_api_token:
+    description: 'Jira API token'
+    required: true
+  
+  email_enabled:
+    description: 'Enable email notifications'
+    required: false
+    default: 'false'
+  
+  email_from:
+    description: 'Email sender address'
+    required: false
+  
+  email_to:
+    description: 'Comma-separated list of email recipients'
+    required: false
+  
+  smtp_host:
+    description: 'SMTP server hostname'
+    required: false
+  
+  smtp_port:
+    description: 'SMTP server port'
+    required: false
+    default: '587'
+  
+  smtp_user:
+    description: 'SMTP username'
+    required: false
+  
+  smtp_pass:
+    description: 'SMTP password'
+    required: false
+  
+  slack_enabled:
+    description: 'Enable Slack notifications'
+    required: false
+    default: 'false'
+  
+  slack_token:
+    description: 'Slack API token'
+    required: false
+  
+  slack_channel:
+    description: 'Slack channel for notifications'
+    required: false
+
+runs:
+  using: 'node16'
+  main: 'index.js'
